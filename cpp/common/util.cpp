@@ -39,6 +39,16 @@ void set_av_codec_ctx(AVCodecContext *c, const std::string &name, int kbs,
       c->rc_max_rate = c->bit_rate;
       c->bit_rate--; // cbr with vbr
     }
+    if (name.find("nvenc") != std::string::npos) {
+      // Cap the VBV window to about one frame interval. Without an explicit
+      // buffer size NVENC's CBR lets a full-screen change emit several
+      // ~700 KB frames back to back; that burst queues for hundreds of ms on
+      // Wi-Fi links and trips delay-based rate control on the caller's side.
+      c->rc_max_rate = c->bit_rate;
+      if (fps > 0) {
+        c->rc_buffer_size = (int)(c->bit_rate / fps);
+      }
+    }
   }
   /* frames per second */
   c->time_base = av_make_q(1, 1000);
@@ -299,6 +309,14 @@ bool change_bit_rate(AVCodecContext *c, const std::string &name, int kbs) {
     c->bit_rate = kbs * 1000;
     if (name.find("qsv") != std::string::npos) {
       c->rc_max_rate = c->bit_rate;
+    }
+    if (name.find("nvenc") != std::string::npos) {
+      // Keep the one-frame VBV window in step with the new bitrate.
+      c->rc_max_rate = c->bit_rate;
+      if (c->framerate.num > 0 && c->framerate.den > 0) {
+        c->rc_buffer_size =
+            (int)(c->bit_rate * c->framerate.den / c->framerate.num);
+      }
     }
   }
   return true;
