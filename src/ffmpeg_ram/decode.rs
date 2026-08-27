@@ -57,6 +57,14 @@ impl DecodeFrame {
     }
 }
 
+/// Release one retain on a CVPixelBufferRef taken out of a [`DecodeFrame`].
+#[cfg(target_os = "macos")]
+pub fn release_pixbuf(pixbuf: usize) {
+    if pixbuf != 0 {
+        unsafe { CVPixelBufferRelease(pixbuf as *const _) };
+    }
+}
+
 #[cfg(target_os = "macos")]
 impl Drop for DecodeFrame {
     fn drop(&mut self) {
