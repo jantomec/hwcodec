@@ -32,6 +32,10 @@ typedef void (*RamDecodeCallback)(const void *obj, int width, int height,
 
 #ifdef __APPLE__
 #include <CoreVideo/CoreVideo.h>
+// The hand-curated mini-enum in ffmpeg_ffi.h mirrors this value for the Rust
+// side; fail the build loudly if an ffmpeg upgrade ever moves it.
+static_assert(AV_PIX_FMT_VIDEOTOOLBOX == 157,
+              "AV_PIX_FMT_VIDEOTOOLBOX moved; update cpp/common/ffmpeg_ffi.h");
 #endif
 
 class FFmpegRamDecoder {

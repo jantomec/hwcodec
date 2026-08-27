@@ -14,6 +14,7 @@
 enum AVPixelFormat {
   AV_PIX_FMT_YUV420P = 0,
   AV_PIX_FMT_NV12 = 23,
+  AV_PIX_FMT_VIDEOTOOLBOX = 157,
 };
 
 int av_log_get_level(void);
