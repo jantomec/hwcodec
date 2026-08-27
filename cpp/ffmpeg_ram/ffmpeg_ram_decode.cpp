@@ -30,6 +30,10 @@ typedef void (*RamDecodeCallback)(const void *obj, int width, int height,
                                   int linesize[AV_NUM_DATA_POINTERS],
                                   uint8_t *data[AV_NUM_DATA_POINTERS], int key);
 
+#ifdef __APPLE__
+#include <CoreVideo/CoreVideo.h>
+#endif
+
 class FFmpegRamDecoder {
 public:
   AVCodecContext *c_ = NULL;
@@ -50,11 +54,16 @@ public:
   int out_ = 0;
 #endif
 
+  // macOS: hand the decoder's CVPixelBuffer to the callback instead of
+  // copying it to system memory (see decode()).
+  bool no_transfer_ = false;
+
   FFmpegRamDecoder(const char *name, int device_type, int thread_count,
-                   RamDecodeCallback callback) {
+                   int no_transfer, RamDecodeCallback callback) {
     this->name_ = name;
     this->device_type_ = (AVHWDeviceType)device_type;
     this->thread_count_ = thread_count;
+    this->no_transfer_ = no_transfer != 0;
     this->callback_ = callback;
   }
 
@@ -197,6 +206,24 @@ private:
           LOG_ERROR(std::string("hw_frames_ctx is NULL"));
           goto _exit;
         }
+#ifdef __APPLE__
+        if (no_transfer_ && frame_->format == AV_PIX_FMT_VIDEOTOOLBOX) {
+          // The receiver takes ownership of one retain on data[3] (the
+          // CVPixelBufferRef); the AVFrame's own reference is released on the
+          // next receive as usual.
+          CVPixelBufferRetain((CVPixelBufferRef)frame_->data[3]);
+          decoded = true;
+#if FF_API_FRAME_KEY
+          int vt_key = frame_->flags & AV_FRAME_FLAG_KEY;
+#else
+          int vt_key = frame_->key_frame;
+#endif
+          callback_(obj, frame_->width, frame_->height,
+                    (AVPixelFormat)frame_->format, frame_->linesize,
+                    frame_->data, vt_key);
+          continue;
+        }
+#endif
         if ((ret = av_hwframe_transfer_data(sw_frame_, frame_, 0)) < 0) {
           LOG_ERROR(std::string("av_hwframe_transfer_data failed, ret = ") +
                     av_err2str(ret));
@@ -290,10 +317,11 @@ extern "C" void ffmpeg_ram_free_decoder(FFmpegRamDecoder *decoder) {
 
 extern "C" FFmpegRamDecoder *
 ffmpeg_ram_new_decoder(const char *name, int device_type, int thread_count,
-                       RamDecodeCallback callback) {
+                       int no_transfer, RamDecodeCallback callback) {
   FFmpegRamDecoder *decoder = NULL;
   try {
-    decoder = new FFmpegRamDecoder(name, device_type, thread_count, callback);
+    decoder =
+        new FFmpegRamDecoder(name, device_type, thread_count, no_transfer, callback);
     if (decoder) {
       if (decoder->reset() == 0) {
         return decoder;

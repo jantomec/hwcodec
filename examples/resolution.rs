@@ -28,6 +28,7 @@ fn main() {
         name: String::from(codec),
         device_type,
         thread_count: 4,
+        no_transfer: false,
     };
     let mut video_decoder = Decoder::new(decode_ctx).unwrap();
 

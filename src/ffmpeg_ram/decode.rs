@@ -25,6 +25,9 @@ pub struct DecodeContext {
     pub name: String,
     pub device_type: AVHWDeviceType,
     pub thread_count: i32,
+    /// macOS: emit frames as retained CVPixelBufferRefs ([`DecodeFrame::pixbuf`])
+    /// instead of copying them to system memory. The receiver owns the retain.
+    pub no_transfer: bool,
 }
 
 pub struct DecodeFrame {
@@ -34,6 +37,35 @@ pub struct DecodeFrame {
     pub data: Vec<Vec<u8>>,
     pub linesize: Vec<i32>,
     pub key: bool,
+    /// Retained CVPixelBufferRef when decoding with `no_transfer` on macOS
+    /// (pixfmt AV_PIX_FMT_VIDEOTOOLBOX); 0 otherwise. Ownership of one retain
+    /// passes to whoever consumes the frame.
+    pub pixbuf: usize,
+}
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn CVPixelBufferRelease(p: *const std::ffi::c_void);
+}
+
+impl DecodeFrame {
+    /// Take ownership of the retained CVPixelBufferRef, leaving the frame
+    /// empty so Drop does not release it.
+    #[cfg(target_os = "macos")]
+    pub fn take_pixbuf(&mut self) -> usize {
+        std::mem::take(&mut self.pixbuf)
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for DecodeFrame {
+    fn drop(&mut self) {
+        // An unconsumed pixel buffer would otherwise pin one of the decoder
+        // pool's few buffers forever.
+        if self.pixbuf != 0 {
+            unsafe { CVPixelBufferRelease(self.pixbuf as *const _) };
+        }
+    }
 }
 
 impl std::fmt::Display for DecodeFrame {
@@ -72,6 +104,7 @@ impl Decoder {
                 CString::new(ctx.name.as_str()).map_err(|_| ())?.as_ptr(),
                 ctx.device_type as _,
                 ctx.thread_count,
+                ctx.no_transfer as _,
                 Some(Decoder::callback),
             );
 
@@ -125,9 +158,13 @@ impl Decoder {
             data: vec![],
             linesize: vec![],
             key: key != 0,
+            pixbuf: 0,
         };
 
-        if pixfmt == AVPixelFormat::AV_PIX_FMT_YUV420P as c_int {
+        if pixfmt == AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX as c_int {
+            frame.pixbuf = datas[3] as usize;
+            frames.push(frame);
+        } else if pixfmt == AVPixelFormat::AV_PIX_FMT_YUV420P as c_int {
             let y = from_raw_parts(datas[0], (linesizes[0] * height) as usize).to_vec();
             let u = from_raw_parts(datas[1], (linesizes[1] * height / 2) as usize).to_vec();
             let v = from_raw_parts(datas[2], (linesizes[2] * height / 2) as usize).to_vec();
@@ -274,6 +311,7 @@ impl Decoder {
                 name: codec.name.clone(),
                 device_type: codec.hwdevice,
                 thread_count: 4,
+                no_transfer: false,
             };
 
             match Decoder::new(c) {
